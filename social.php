@@ -3,7 +3,7 @@
 Plugin Name: Social
 Plugin URI: http://mailchimp.com/social-plugin-for-wordpress/
 Description: Broadcast newly published posts and pull in dicussions using integrations with Twitter and Facebook. Brought to you by <a href="http://mailchimp.com">MailChimp</a>.
-Version: 1.0
+Version: 1.0.2
 Author: Crowd Favorite
 Author URI: http://crowdfavorite.com/
 */
@@ -30,7 +30,7 @@ final class Social {
 	/**
 	 * @var  string  $version  plugin version
 	 */
-	public static $version = '1.0';
+	public static $version = '1.0.2';
 
 	/**
 	 * @var  string  $prefix  prefix used to identify the plugin
@@ -273,12 +273,14 @@ final class Social {
 				update_option(Social::$prefix . $key, $value);
 			}
 
-			if ($key == 'installed_version' and (int)$value < (int)Social::$version) {
+			if ($key == 'installed_version' and version_compare($value, Social::$version, '<')) {
 				// Need to run an upgrade
 				Social::$upgrade = true;
+				$this->option($key, Social::$version, true);
 			}
-
-			$this->option($key, $value);
+			else {
+				$this->option($key, $value);
+			}
 		}
 		
 		$url = plugins_url('', SOCIAL_FILE);
@@ -686,6 +688,7 @@ final class Social {
 		}
 		// Authorization complete?
 		else if (isset($_POST['data'])) {
+			// Need to call stripslashes as Sopresto is adding slashes onto the payload.
 			$data = stripslashes($_POST['data']);
 			if (strpos($data, "\r") !== false) {
 				$data = str_replace(array("\r\n", "\r"), "\n", $data);
@@ -696,6 +699,9 @@ final class Social {
 				'user' => $data->user
 			);
 
+			// Remove all HTML from the user object.
+			$account->user = $this->social_kses($account->user);
+
 			// Add the account to the service.
 			if (IS_PROFILE_PAGE) {
 				$service = $this->service($data->service)->account($account);
@@ -705,12 +711,17 @@ final class Social {
 			}
 
 			// Do we need to create a user?
+			$save = true;
 			if (!$service->loaded()) {
-				$service->create_user($account);
+				if (!$service->create_user($account)) {
+					$save = false;
+				}
 			}
 
-			// Save the services
-			$service->save($account);
+			if ($save) {
+				// Save the services
+				$service->save($account);
+			}
 
 			// Remove the service from the errors?
 			$deauthed = get_option(Social::$prefix . 'deauthed');
@@ -730,7 +741,7 @@ final class Social {
 </head>
 <script type="text/javascript">
 	jQuery(function() {
-		window.opener.reloadSocialHTML();
+		window.opener.reloadSocialHTML('<?php echo (!$save ? 'false' : 'true'); ?>');
 		window.close();
 	});
 </script>
@@ -2253,6 +2264,39 @@ endforeach;
 		$file = fopen(SOCIAL_PATH . 'log.txt', 'a+');
 		fwrite($file, '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL);
 		fclose($file);
+	}
+
+	/**
+	 * Recursively runs wp_kses() on an object.
+	 *
+	 * @param  object|array  $object
+	 * @return object
+	 */
+	private function social_kses($object) {
+		if (is_object($object)) {
+			$_object = new stdClass;
+		}
+		else {
+			$_object = array();
+		}
+
+		foreach ($object as $key => $val) {
+			if (is_object($val)) {
+				$_object->$key = $this->social_kses($val);
+			}
+			else if (is_array($val)) {
+				$_object[$key] = $this->social_kses($val);
+			}
+			else {
+				if (is_object($_object)) {
+					$_object->$key = wp_kses($val, array());
+				}
+				else {
+					$_object[$key] = wp_kses($val, array());
+				}
+			}
+		}
+		return $_object;
 	}
 
 } // End Social
