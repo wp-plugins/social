@@ -17,28 +17,28 @@ abstract class Social_Controller {
 	protected $social;
 
 	/**
-	 * @var  bool
-	 */
-	protected $nonce_verified = false;
-
-	/**
-	 * Initializes the controller with the request and Social objects. Also verifies
-	 * the NONCE if it is on the request.
+	 * Initializes the controller with the request and Social objects.
 	 *
 	 * @param  Social_Request  $request
 	 */
 	public function __construct(Social_Request $request) {
 		$this->request = $request;
 		$this->social = Social::instance();
+	}
+	
+	public function request() {
+		return $this->request;
+	}
 
-		$nonce = $request->query('_wpnonce');
-		if ($nonce !== null) {
-			if (!wp_verify_nonce($nonce, $this->request->action())) {
-				Social::log('NONCE Failure', array(), null, true);
-				wp_die('Oops, please try again.');
-			}
-
-			$this->nonce_verified = true;
+	public function social() {
+		return $this->social;
+	}
+	
+	protected function verify_nonce() {
+		$nonce = $this->request->query('_wpnonce');
+		if (!wp_verify_nonce($nonce, $this->request->action())) {
+			Social::log('NONCE Failure', array(), null, true);
+			wp_die('Oops, please try again.');
 		}
 	}
 

@@ -68,7 +68,7 @@ abstract class Social_Service {
 			$url = admin_url($url.$params);
 		}
 		else {
-			$url = site_url('index.php'.$params.'&post_id='.$post->ID);
+			$url = home_url('index.php'.$params.'&post_id='.$post->ID);
 		}
 
 		return $url;
@@ -95,27 +95,39 @@ abstract class Social_Service {
 		);
 
 		if ($is_admin) {
-			$personal = false;
-			if (defined('IS_PROFILE_PAGE')) {
-				$personal = true;
-			}
+			$personal = defined('IS_PROFILE_PAGE');
 			$url = Social::settings_url($params, $personal);
-			$text = '<span title="'.__('Disconnect', 'social').'" class="social-disconnect social-ir">'.__('Disconnect', 'social').'</span>';
 		}
 		else {
+			$params['redirect_to'] = (isset($_GET['redirect_to']) ? $_GET['redirect_to'] : $_SERVER['REQUEST_URI']);
 			foreach ($params as $key => $value) {
 				$params[$key] = urlencode($value);
 			}
-
-			$params['redirect_to'] = $_SERVER['REQUEST_URI'];
-			if (isset($_GET['redirect_to'])) {
-				$params['redirect_to'] = $_GET['redirect_to'];
-			}
-
 			$url = add_query_arg($params, home_url());
+		}
+		return $url;
+	}
+
+	/**
+	 * Returns the disconnect link.
+	 *
+	 * @static
+	 *
+	 * @param  object  $account
+	 * @param  bool    $is_admin
+	 * @param  string  $before
+	 * @param  string  $after
+	 *
+	 * @return string
+	 */
+	public function disconnect_link($account, $is_admin = false, $before = '', $after = '') {
+		$url = $this->disconnect_url($account, $is_admin, $before, $after);
+		if ($is_admin) {
+			$text = '<span title="'.__('Disconnect', 'social').'" class="social-disconnect">'.__('Disconnect', 'social').'</span>';
+		}
+		else {
 			$text = __('Disconnect', 'social');
 		}
-
 		return sprintf('%s<a href="%s">%s</a>%s', $before, esc_url($url), $text, $after);
 	}
 
@@ -128,11 +140,17 @@ abstract class Social_Service {
 	 */
 	public function create_user($account, $nonce = null) {
 		$username = $account->username();
-		$username = str_replace(' ', '_', $username);
+		$username = sanitize_user($username, true);
 		if (!empty($username)) {
 			$user = get_user_by('login', $this->_key.'_'.$username);
 			if ($user === false) {
 				$id = wp_create_user($this->_key.'_'.$username, wp_generate_password(20, false), $this->_key.'.'.$username.'@example.com');
+				if (is_wp_error($id)) {
+					Social::log('Failed to create/find user with username of :username.', array(
+						'username' => $username,
+					));
+					return false;
+				}
 
 				$role = '';
 				if (get_option('users_can_register') == '1') {
@@ -330,6 +348,17 @@ abstract class Social_Service {
 
 		return $this;
 	}
+	
+	/**
+	 * Removes all accounts from the service.
+	 *
+	 * @abstract
+	 * @return Social_Service
+	 */
+	public function clear_accounts() {
+		$this->_accounts = array();
+		return $this;
+	}
 
 	/**
 	 * Formats the broadcast content.
@@ -356,23 +385,22 @@ abstract class Social_Service {
 				case '{url}':
 					$url = wp_get_shortlink($post->ID);
 					if (empty($url)) {
-						$url = site_url('?p='.$post->ID);
+						$url = home_url('?p='.$post->ID);
 					}
 					$url = apply_filters('social_broadcast_permalink', $url, $post, $this);
 					$content = esc_url($url);
 					break;
 				case '{title}':
-					$content = $post->post_title;
+					$content = htmlspecialchars_decode($post->post_title);
 					break;
 				case '{content}':
-					$content = strip_tags($post->post_content);
+					$content = htmlspecialchars_decode(strip_tags($post->post_content));
+ 					$content = str_replace(array("\n", "\r", PHP_EOL, '&nbsp;'), ' ', $content);
 					$content = preg_replace('/\s+/', ' ', $content);
-					$content = str_replace(array("\n", "\r", PHP_EOL), ' ', $content);
-					$content = str_replace('&nbsp;', ' ', $content);
 					break;
 				case '{author}':
 					$user = get_userdata($post->post_author);
-					$content = $user->display_name;
+					$content = htmlspecialchars_decode($user->display_name);
 					break;
 				case '{date}':
 					$content = get_date_from_gmt($post->post_date_gmt);
@@ -479,7 +507,6 @@ abstract class Social_Service {
 		if (!is_object($account)) {
 			$account = $this->account($account);
 		}
-
 		if ($account !== false) {
 			$proxy = apply_filters('social_api_proxy', Social::$api_url.$this->_key, $this->_key);
 			$api = apply_filters('social_api_endpoint', $api, $this->_key);
@@ -492,14 +519,14 @@ abstract class Social_Service {
 					'method' => $method,
 					'public_key' => $account->public_key(),
 					'hash' => sha1($account->public_key().$account->private_key()),
-					'params' => json_encode(stripslashes_deep($args))
+					'params' => json_encode($args)
 				)
 			));
 			if (!is_wp_error($request)) {
 				$request['body'] = apply_filters('social_response_body', $request['body'], $this->_key);
 				if (is_string($request['body'])) {
 					// slashes are normalized (always added) by WordPress
-					$request['body'] = stripslashes_deep(json_decode($request['body']));
+					$request['body'] = json_decode(stripslashes_deep($request['body']));
 				}
 				return Social_Response::factory($this, $request, $account);
 			}
@@ -507,7 +534,6 @@ abstract class Social_Service {
 				Social::log('Service::request() error: '.$request->get_error_message());
 			}
 		}
-
 		return false;
 	}
 
@@ -518,7 +544,7 @@ abstract class Social_Service {
 	 * @return bool
 	 */
 	public function show_full_comment($type) {
-		return true;
+		return (!in_array($type, self::comment_types_meta()));
 	}
 
 	/**
@@ -678,28 +704,76 @@ abstract class Social_Service {
 
 		$status_url = $this->status_url($item->comment_author, $item->social_status_id);
 		$title = apply_filters('social_item_output_title', $item->comment_author, $this->key());
-		$image = sprintf('<img src="%s" width="%s" height="%s" alt="%s" />', esc_url($item->social_profile_image_url), esc_attr($width), esc_attr($height), esc_attr($title));
+		$image_format = apply_filters('social_item_output_image_format', '<img src="%1$s" width="%2$s" height="%3$s" alt="%4$s" />');
+		$image = sprintf($image_format, esc_url($item->social_profile_image_url), esc_attr($width), esc_attr($height), esc_attr($title));
 		return sprintf('<a href="%s" title="%s"%s>%s</a>', esc_url($status_url), esc_attr($title), $style, $image);
 	}
 
 	/**
-	 * Displays the auth item output.
+	 * Checks to see if the comment is allowed.
 	 *
-	 * @param  Social_Service_Account  $account
-	 * @return Social_View
+	 * [!!] Handles the exception for duplicate comments.
+	 *
+	 * @param  array   $commentdata
+	 * @param  int     $result_id
+	 * @param  object  $post
+	 * @return array|bool
 	 */
-	public function auth_output(Social_Service_Account $account) {
-		$profile_url = esc_url($account->url());
-		$profile_name = esc_html($account->name());
-		$disconnect = $this->disconnect_url($account, true);
-		$name = sprintf('<a href="%s">%s</a>', $profile_url, $profile_name);
+	public function allow_comment(array $commentdata, $result_id, &$post) {
+		try {
+			add_filter('wp_die_handler', array('Social', 'wp_die_handler'));
+			$commentdata['comment_approved'] = wp_allow_comment($commentdata);
+			remove_filter('wp_die_handler', array('Social', 'wp_die_handler'));
+			return $commentdata;
+		} catch (Exception $e) {
+			remove_filter('wp_die_handler', array('Social', 'wp_die_handler'));
+			if ($e->getMessage() == Social::$duplicate_comment_message) {
+				// Remove the aggregation ID from the stack
+				unset($post->results[$this->_key][$result_id]);
+				$aggregated_ids = array();
+				foreach ($post->aggregated_ids[$this->_key] as $id) {
+					if ($id != $result_id) {
+						$aggregated_ids[] = $id;
+					}
+				}
+				$post->aggregated_ids[$this->_key] = $aggregated_ids;
 
-		return Social_View::factory('wp-admin/parts/auth_output', array(
-			'account' => $account,
-			'key' => $this->key(),
-			'name' => $name,
-			'disconnect' => $disconnect,
-		));
+				// Mark the result as ignored
+				Social_Aggregation_Log::instance($post->ID)->ignore($result_id);
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Comment types for this service.
+	 *
+	 * @static
+	 * @return array
+	 */
+	public static function comment_types() {
+		return array();
+	}
+
+	/**
+	 * Comment types that are "meta" (not displayed in full).
+	 *
+	 * @static
+	 * @return array
+	 */
+	public static function comment_types_meta() {
+		return array();
+	}
+
+	/**
+	 * Any additional parameters that should be passed with a broadcast.
+	 *
+	 * @static
+	 * @return array
+	 */
+	public function get_broadcast_extras($account_id, $post, $args = array()) {
+		return apply_filters($this->key().'_broadcast_extras', $args, $this, $account_id, $post);
 	}
 
 } // End Social_Service
