@@ -3,7 +3,7 @@
 Plugin Name: Social
 Plugin URI: http://mailchimp.com/social-plugin-for-wordpress/
 Description: Broadcast newly published posts and pull in discussions using integrations with Twitter and Facebook. Brought to you by <a href="http://mailchimp.com">MailChimp</a>.
-Version: 2.9.1
+Version: 2.11
 Author: Crowd Favorite
 Author URI: http://crowdfavorite.com/
 */
@@ -25,7 +25,7 @@ final class Social {
 	/**
 	 * @var  string  version number
 	 */
-	public static $version = '2.9.1';
+	public static $version = '2.11';
 
 	/**
 	 * @var  string  CRON lock directory.
@@ -489,9 +489,9 @@ final class Social {
 		Social::log('Checking system CRON');
 		// Schedule CRONs
 		if (Social::option('cron') == '1') {
-			if (wp_next_scheduled('social_cron_15_init') === false) {
+			if (wp_next_scheduled('socialcron15init') === false) {
 				Social::log('Adding Social 15 CRON schedule');
-				wp_schedule_event(time() + 900, 'every15min', 'social_cron_15_init');
+				wp_schedule_event(time() + 900, 'every15min', 'socialcron15init');
 			}
 			wp_remote_get(
 				admin_url('options_general.php?'.http_build_query(array(
@@ -1203,7 +1203,7 @@ final class Social {
 	/**
 	 * Sends a request to initialize CRON 15.
 	 *
-	 * @wp-action  social_cron_15_init
+	 * @wp-action  socialcron15init
 	 * @return void
 	 */
 	public function cron_15_init() {
@@ -1214,7 +1214,7 @@ final class Social {
 	/**
 	 * Runs the aggregation loop.
 	 *
-	 * @wp-action  social_cron_15
+	 * @wp-action  socialcron15
 	 * @return void
 	 */
 	public function run_aggregation() {
@@ -1674,11 +1674,11 @@ final class Social {
 		// set Social Items for Social comments
 		if (!in_array($comment->comment_type, $ignored_types)) {
 			$status_id = get_comment_meta($comment->comment_ID, 'social_status_id', true);
-			if (!empty($status_id)) {
+			if (is_string($status_id) && $status_id) {
 				$status_url = $service->status_url(get_comment_author(), $status_id);
 			}
 			// Social items?
-			if (!empty($comment->social_items)) {
+			if (!empty($comment->social_items) && isset($status_url)) {
 				if (is_object($service) && method_exists($service, 'key')) {
 					$avatar_size = apply_filters('social_items_comment_avatar_size', array(
 						'width' => 18,
@@ -2319,9 +2319,9 @@ add_action('wp-mail.php', 'social_wp_mail_indicator');
 add_action('social_settings_save', array('Social_Service_Facebook', 'social_settings_save'));
 
 // CRON Actions
-add_action('social_cron_15_init', array($social, 'cron_15_init'));
+add_action('socialcron15init', array($social, 'cron_15_init'));
 if (Social::option('aggregate_comments')) {
-	add_action('social_cron_15', array($social, 'run_aggregation'));
+	add_action('socialcron15', array($social, 'run_aggregation'));
 }
 
 // Admin Actions
